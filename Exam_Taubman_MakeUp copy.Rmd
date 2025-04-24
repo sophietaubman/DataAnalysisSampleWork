@@ -1,0 +1,564 @@
+---
+title: "Make-Up Exam"
+output: html_document
+date: "2024-06-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+Load in Packages (Including All Known Potentials)
+```{r packages, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+require(tidyverse)
+require(dplyr)
+require(ggplot2)
+require(lubridate)
+require(mosaicData)
+require(reshape2)
+require(maps)
+require(shiny)
+require(ggrepel)
+require(plotly)
+require(RColorBrewer)
+require(shinythemes)
+require(leaflet)
+require(geojsonio)
+require(sp)
+require(sf)
+require(statebins)
+require(leaflet.extras)
+require(bslib)
+require(tools)
+require(geofacet)
+require(treemap)
+require(htmltools)
+require(htmlwidgets)
+require(riverplot)
+require(ggalluvial)
+```
+################################################################################ 
+
+Question 1 - Food Inspections in Chicago
+
+################################################################################ 
+```{r Data Q1: food_inspcections}
+food_inspections<-read.csv("https://raw.githubusercontent.com/nazzstat/DataVisualization/master/Food_Inspections.csv")
+```
+
+1a. Checking the Data Structure of Variable "Inspection.Date"
+```{r 1a}
+str(food_inspections$Inspection.Date)
+food_inspections$Inspection.Date<-as.Date(food_inspections$Inspection.Date, format="%m/%d/%y")
+```
+
+1b. New Week Day Variable + Visual for Frequency of Inspections per Weekday
+```{r 1b}
+# Label = True creates ordered factor variable with levels sun - sat
+food_inspections %>% 
+  mutate(weekday = wday(Inspection.Date, label = TRUE, abbr = FALSE)) -> food_inspections
+
+# Displays Frequency with Count on y-axis
+ggplot(data=food_inspections)+
+  geom_bar(aes(x=weekday, fill = (..count../sum(..count..))*100))+
+  ylab("Count")+
+  xlab("")+
+  ggtitle("Frequency of Inspections by Weekday")+
+  scale_fill_distiller(palette = "PRGn")+
+  theme_minimal()+
+  labs(fill = "%")
+
+# Displays Frequency with Percent on y-axis
+ggplot(data=food_inspections)+
+  geom_bar(aes(x=weekday, y=(..count../sum(..count..))*100, fill=(..count../sum(..count..))*100))+
+  ylab("Percent")+
+  xlab("")+
+  ggtitle("Percent of Inspections by Weekday")+
+  scale_fill_distiller(palette = "PRGn")+
+  theme_minimal()+
+  labs(fill = "%")
+```
+
+The above visual shows that inspections most often occur on Thursdays, followed by Tuesday, Friday, Wednesday, Monday, and a very small amount on Saturdays and an imperceptible number on Sundays.
+
+1c. Variable for Inspection Pass/Fail and Visual of Frequency by Weekday
+```{r 1c}
+food_inspections %>%
+  mutate(code_results=ifelse(Results == "Fail", 1, 0)) -> food_inspections
+
+ggplot(data=food_inspections)+
+  stat_summary(aes(x=weekday, y=code_results), fill = "#911", geom="bar",fun="mean")+
+  ylab("Proportion of Failed Inspections")+
+  xlab("")+
+  ggtitle("Proportion of Failed Inspections by Weekday")+
+  theme_minimal()
+```
+
+Yes, there is a higher tendency for inspections to fail on Saturday than any other day of the week.
+
+1d. Question, Visual, Description
+```{r 1d, message=FALSE, warning=FALSE}
+# Question: What is the relationship between inspection failure rates and zip codes?
+
+# group by = "zip"/region...
+
+library(readr)
+Zip_Codes <- read_csv("~/Downloads/Zip_Codes.csv")
+View(Zip_Codes)
+
+Zip_Codes$the_geom <- st_as_sfc(Zip_Codes$the_geom)
+Zip_Codes$the_geom <- st_as_sf(Zip_Codes$the_geom)
+
+Zip_Codes <- Zip_Codes %>% 
+  rename(Zip = ZIP)
+
+Zip_Codes$Zip <- as.character(Zip_Codes$Zip)
+
+food_inspections$Zip <- as.character(food_inspections$Zip)
+
+dfr <- food_inspections %>%             
+  mutate(Zip = as.factor(Zip), 
+         code_results = as.ordered(code_results))
+
+dfr_prop <- dfr %>% 
+  count(Zip, code_results) %>%           
+  mutate(prop = prop.table(n))    
+
+dfr_perc <- dfr %>% 
+  count(Zip, code_results) %>% 
+  mutate(perc = prop.table(n)*100) %>%      
+  select(-n) %>%                            
+  spread(code_results, perc) 
+
+dfr_dist <- dfr %>% 
+  count(Zip) %>%                            
+  mutate(`(\\%)` = prop.table(n)*100) %>%   
+  left_join(dfr_perc, by = 'Zip')           
+
+zip_map<-full_join(Zip_Codes, dfr_perc, by="Zip")
+
+zip_map<-na.exclude(zip_map)
+
+zip_map <- zip_map %>% 
+  rename(failed = "1")
+
+zip_map <- zip_map %>% 
+  rename(passed = "0")
+
+```
+
+```{r echo=TRUE}
+tag.map.title <- tags$style(HTML("
+  .leaflet-control.map-title { 
+    transform: translate(-50%,20%);
+    position: fixed !important;
+    left: 50%;
+    text-align: center;
+    padding-left: 10px; 
+    padding-right: 10px; 
+    color: red;
+    font-weight: bold;
+    font-size: 24px;
+  }
+"))
+
+title <- tags$div(
+  tag.map.title, HTML("Chicago Zipcodes"))  
+
+pal <- colorQuantile("Reds",domain=NULL, n =5)
+
+leaflet() %>%
+  addTiles("CartoDB.Positron") %>%
+  addPolygons(data=zip_map$the_geom,
+              fillColor = ~pal(zip_map$failed),
+              fillOpacity = 0.8,
+              color = "black",
+              weight = 1,
+              popup=~paste("Zipcode:", zip_map$Zip,"<br>Failure Rate:", zip_map$failed)) %>% 
+  addLegend("bottomleft",
+            colors=brewer.pal(5,"Reds"),
+            labels=c("lowest","","","","highest"),
+            title="Food Inspection Failure Rates") %>% 
+  addControl(title, position = "topleft", className="map-title")
+
+# The title is printing when I run the code in my markdown file, but I don't know why it is not printing in the html file when I knit the document... :(
+```
+
+The above visual shows that food inspection rates not only vary by zip code, but also vary by region of zip codes, which indicates that there is likely an association with the location of a restaurant and its rate of inspection failure. 
+
+################################################################################ 
+
+Question 2 - Weekly Retail Sales of Hass Avocados!
+
+################################################################################ 
+```{r Data Q2: avocado}
+avocado<-read.csv("https://raw.githubusercontent.com/nazzstat/DataVisualization/master/avocado.csv")
+```
+
+2a. Density Plots for Conventional and Organic Graphed with Facet Grid
+```{r}
+ggplot(data=avocado)+
+  geom_density(aes(x=AveragePrice, fill=type),color="black", alpha=0.8) +
+  scale_fill_manual("Type of Avocado", values = c("deepskyblue3", "aquamarine3"))+
+  facet_grid(type ~ .)+
+  ggtitle("Distribution of Average Weekly Prices by Type")+
+  xlab("Average Price")+
+  ylab("Density")
+```
+
+On average, the conventional avocados have a lower price than the organic avocados.
+
+2b. Determine the code that will create the plot below. Describe what the plot indicates in a sentence or
+two. (5 points)
+```{r}
+avocado$Date<-as.Date(avocado$Date, format="%Y-%m-%d")
+
+ggplot(data=avocado)+
+  stat_summary(aes(x=Date, y=AveragePrice, color=type),geom="smooth",fun="mean")+
+  scale_color_manual("Type of Avocado", values = c("deepskyblue3", "aquamarine3"))+
+  ggtitle("Average Price by Type")+
+  xlab("Date")+
+  ylab("Average Price per Avocado ($)")
+  
+```
+
+The above plot indicates that the types of avocados follow the same trends in prices, based on their near identical shapes, the only difference being that the conventional is consistently about 60 cents less than the organic.
+
+2c. Average Price by Year
+```{r}
+avocado %>% 
+  group_by(year) %>% 
+  mutate(avgprice_yr = mean(AveragePrice)) -> avocado
+
+ggplot(data=avocado)+
+  stat_summary(aes(x=year, y=avgprice_yr), color = "black", fill = "aquamarine4", geom="bar", fun="mean", alpha = 0.8)+
+  xlab("Year")+
+  ylab("Average Price of a Single Avocado ($)")+
+  ggtitle("Average Avocado Price each Year")
+```
+
+2d. Total number of each bag size sold each week -> avocado.bags
+```{r}
+avocado %>% 
+  group_by(Date) %>% 
+  count(Small.Bags) %>% 
+  summarise(sb_wk = sum(Small.Bags)) -> avocado.bags1
+
+avocado %>% 
+  group_by(Date) %>% 
+  count(Large.Bags) %>% 
+  summarise(lg_wk = sum(Large.Bags)) -> avocado.bags2
+
+avocado %>% 
+  group_by(Date) %>% 
+  count(XLarge.Bags) %>% 
+  summarise(xl_wk = sum(XLarge.Bags)) -> avocado.bags3
+
+full_join(avocado.bags1, avocado.bags2, by = join_by(Date)) -> avocado.bags
+full_join(avocado.bags, avocado.bags3, by = join_by(Date)) -> avocado.bags
+```
+
+2e. Bag Sales
+```{r}
+avo_long <- melt(avocado.bags, id=c("Date"))
+names(avo_long) <- c("Date","Bag","Count")
+
+ggplot(data=avo_long)+
+  geom_area(aes(x=Date, y=Count, fill=Bag))+
+  scale_fill_manual("Bag Size", labels = c("Small","Large","X-Large"), values = c("darkolivegreen","darkolivegreen4","darkolivegreen2"))+
+  ylab("Number of Bags Sold")+
+  ggtitle("Avocado Sales over Time")
+
+```
+
+Small bags are the most commonly bought bag size of avocados, followed by Large, and X-Large bags are very rarely purchased, indicating a relationship between smaller bag sizes and greater number of purchases.
+
+################################################################################ 
+
+Question 3 - Exports/Imports Riverplot
+
+################################################################################ 
+
+The top export destinations of the United States:
+Canada ($241B)
+Mexico ($194B)
+China ($134B)
+Japan ($67.5B)
+Germany ($61.6B)
+
+The top import origins to the United States:
+China ($432B)
+Canada ($331B)
+Mexico ($291B)
+Japan ($128B)
+Germany ($121B)
+
+The top exports of the United States:
+Refined Petroleum ($103B)
+Cars ($60.8B)
+Planes, Helicopters, and/or Spacecraft ($53.2B)
+Vehicle Parts ($38.4B)
+Packaged Medicaments ($38.1B)
+
+Its top imports:
+Crude Petroleum ($230B)
+Cars ($155B)
+Computers ($92B)
+Refined Petroleum ($69.2B)
+Vehicle Parts ($62.8B)
+
+Riverplot!
+```{r}
+nodes<-data.frame(ID=c("China1","Canada1","Mexico1","Japan1", "Germany1","USA","China2","Canada2","Mexico2","Japan2", "Germany2"),
+                   x=c(0,0,0,0,0,1,2,2,2,2,2),
+                   y=c(10,8,6,4,2,6,10,8,6,4,2),
+                   col=c("darkseagreen1","darkseagreen2","darkseagreen3",
+                        "darkseagreen","darkseagreen4","darkcyan","darkseagreen1","darkseagreen2","darkseagreen3",
+                        "darkseagreen","darkseagreen4"),
+                   labels=c("China","Canada","Mexico","Japan", "Germany","USA","China","Canada","Mexico","Japan", "Germany"))
+
+edges<-data.frame(N1=c("China1","Canada1","Mexico1","Japan1", "Germany1",rep("USA",5)),
+                   N2=c(rep("USA",5),"China2","Canada2","Mexico2","Japan2", "Germany2"),
+                   Value=c(432,331,291,128,121,134,241,194,67.5,61.6))
+
+river_data<-makeRiver(nodes, edges)
+
+riverplot(river_data, lty = 0, srt = 30, default_style = NULL, gravity = "top",
+          node_margin = 1, nodewidth = 1, plot_area = 0.95, nsteps = 50, yscale = "auto")
+title("Top Imports to USA and Exports out of USA")
+
+```
+
+################################################################################ 
+
+Question 4 - Obesity Data
+
+################################################################################ 
+```{r}
+obesity<-read.csv("https://raw.githubusercontent.com/nazzstat/DataVisualization/master/Obese2.csv")
+```
+
+1. Dumbbell Plot to Show Obesity Rates in 1990 and 2016
+```{r, fig.width=8, fig.height=10}
+
+obesity %>% 
+  mutate(year1990 = as.numeric(sub("%","",Year1990))) -> obesity
+
+obesity %>% 
+  mutate(year2016 = as.numeric(sub("%","",Year2016))) -> obesity
+
+obesity %>%
+  mutate(State2=factor(State,
+                       levels = obesity$State,
+                       ordered=TRUE)) -> obesity_bell
+
+ggplot(data=obesity_bell)+
+  geom_segment(aes(x=year1990, xend=year2016, y=State2, yend=State2),
+               color = "#aeb6bf",
+               size = 1.5, 
+               alpha = .5)+
+  geom_point(aes(x=year1990, y=State2, color="1990"), size = 1)+
+  geom_point(aes(x=year2016, y=State2, color="2016"), size = 1)+
+  xlab("Obesity Rate")+
+  ylab("State")+
+  ggtitle("Obesity Rates in 1990 and 2016")+
+  scale_color_manual("Year",values=c("1990"="darkorange", "2016"="darkred"))+
+  theme_bw()
+```
+
+The above dumbbell visualization is a useful took to quickly identify which states have the highest obesity rates in 2016, as well as their corresponding 1990 rates, though a more helpful adaptation could be to show which states had the greatest changes. Overall, dumbbell plots are only useful for conveying an aspect of a dataset, but not great at conveying multiple aspects.
+
+2. Leaflet Choropleth Showing Obesity Rates in 1990
+```{r}
+state_shapes<-geojson_read("https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json",what="sp")
+
+state_shapes <- st_as_sf(state_shapes)
+
+state_shapes %>%
+  rename(State=name) -> state_shapes
+
+Obese_ToMap<-left_join(state_shapes, obesity,by="State")
+
+pal <- colorQuantile("RdPu",domain=NULL, n =5)
+
+leaflet(data=Obese_ToMap) %>%
+  addTiles() %>%
+  addPolygons(fillColor = ~pal(year1990),fillOpacity = 0.8,
+              color = "black",
+              weight = 1,
+              popup=~paste(State, "<br>Obesity Rate in 1990:", year1990,"%","<br>Obesity Rate in 2016:", year2016,"%") ) %>%
+  addLegend("bottomleft",
+            colors=brewer.pal(5,"RdPu"),
+            labels=c("low","","","","high"),
+            title="Relative Obesity Rates in 1990")
+
+```
+
+The above choropleth visualization is helpful to see the distrivution of obesity rates in 1990, though is not as useful as the other two visuals because it does not include data for 2016.
+
+3. GeoFacet Bar Graph
+
+```{r, fig.width=12, fig.height=6.5}
+obesity %>% 
+  select(X, State, year1990, year2016) -> obesity_geo
+
+melt(obesity_geo, id=c("X","State")) -> obesity_geo_long
+
+names(obesity_geo_long)<-c("X","State","Year","Obesity")
+
+obesity_geo_long %>% 
+  mutate(State=ifelse(State=="DC", "District of Columbia", State)) -> obesity_geo_long
+
+ggplot(data=obesity_geo_long)+
+  stat_summary(aes(x=Year, y=Obesity, fill=Year),
+               geom="bar", fun="mean", position="dodge")+
+  facet_geo(~State, grid="us_state_grid1")+
+  scale_fill_manual(values=c("darkorange","darkred"))+
+  theme_bw()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+  
+
+```
+
+The above geofacet visualization shows a very clear and concise summary of how obesity rates changed from 1990 to 2016, showing an overwhelming increase in rates nationally.
+
+################################################################################ 
+
+Question 5 - Exercise Data
+
+################################################################################ 
+```{r}
+Exercise_data<-read.csv("https://raw.githubusercontent.com/nazzstat/DataVisualization/master/Exercise_data.csv")
+```
+
+Exercise habits among individuals 65+ were tracked across 6 different years from 2018-2023. Exercise
+frequency classifications were determined by researchers who were tracking their activity behaviors using a
+fitness tracker. Only the 100 participants who were compliant and wore their fitness trackers at least 70% of
+days throughout the 6 year period are included in the data below.
+
+a. Construct a visualization that allows you to estimate the proportion of older adults at each exercise frequency level in 2018.
+```{r}
+
+Exercise_data %>% 
+  group_by(X2018, X2019, X2020,X2021,X2022,X2023) %>%
+  count()->Exercise_data_count
+
+Exercise_data_count %>% 
+  mutate(X2018=factor(X2018, levels=c("Never", "A few times a month", "2-4 times per week", "5+ times per week", ordered=TRUE))) -> Exercise_data_count
+
+Exercise_data_count %>% 
+  mutate(X2019=factor(X2019, levels=c("Never", "A few times a month", "2-4 times per week", "5+ times per week", ordered=TRUE))) -> Exercise_data_count
+
+Exercise_data_count %>% 
+  mutate(X2020=factor(X2020, levels=c("Never", "A few times a month", "2-4 times per week", "5+ times per week", ordered=TRUE))) -> Exercise_data_count
+
+Exercise_data_count %>% 
+  mutate(X2021=factor(X2021, levels=c("Never", "A few times a month", "2-4 times per week", "5+ times per week", ordered=TRUE))) -> Exercise_data_count
+
+Exercise_data_count %>% 
+  mutate(X2022=factor(X2022, levels=c("Never", "A few times a month", "2-4 times per week", "5+ times per week", ordered=TRUE))) -> Exercise_data_count
+
+Exercise_data_count %>% 
+  mutate(X2023=factor(X2023, levels=c("Never", "A few times a month", "2-4 times per week", "5+ times per week", ordered=TRUE))) -> Exercise_data_count
+
+ggplot(data=Exercise_data_count)+
+  geom_bar(aes(x=X2018, fill = X2018),show.legend=FALSE)+  
+  ylab("Count of Older Adults")+
+  xlab("Exercise Frequency")+
+  ggtitle("Exercise Frequency of Older Adults in 2018")+
+  scale_fill_brewer(palette = "RdYlGn")+
+  theme_minimal()
+```
+
+b. Construct a visualization that allows you to estimate the proportion of older adults at each exercise frequency level in 2021.
+```{r}
+ggplot(data=Exercise_data_count)+
+  geom_bar(aes(x=X2021, fill = X2021),show.legend=FALSE)+  
+  ylab("Count of Older Adults")+
+  xlab("Exercise Frequency")+
+  ggtitle("Exercise Frequency of Older Adults in 2021")+
+  scale_fill_brewer(palette = "RdYlGn")+
+  theme_minimal()
+```
+
+c. Re-create the plot below that visually shows the breakdown of exercise frequency at each time point.
+```{r}
+exercise_long <- melt(Exercise_data, id=c("id"))
+
+names(exercise_long)<-c("id","year","exercise")
+
+exercise_long %>% 
+  mutate(exercise=factor(exercise, levels=c("5+ times per week", "2-4 times per week","A few times a month", "Never", ordered=TRUE))) -> exercise_long
+
+levels(exercise_long$year) <- c("2018", "2019", "2020", "2021", "2022", "2023")
+
+exercise_long %>% 
+  group_by(year, exercise) %>%
+  count() ->exercise_long_count
+
+
+ggplot(data=exercise_long_count)+
+  stat_summary(aes(x=year, y =n, fill = exercise),fun="mean",geom="bar", position="stack")+  
+  ylab("Count of Older Adults")+
+  xlab("Year")+
+  ggtitle("Exercise Frequency of Older Adults from 2018 to 2023")+
+  scale_fill_brewer("Exercise Frequency",  palette="RdYlGn", direction = -1)+
+  theme_minimal()
+
+```
+
+d. Construct a visual that allows you to track the flow of exercise status across the time points. What does this plot allow you to see that the previous plot does not?
+```{r}
+
+exercise_long_alluvial <- melt(Exercise_data, id=c("id"))
+
+names(exercise_long_alluvial)<-c("id","year","exercise")
+
+exercise_long_alluvial %>% 
+  group_by(id, year) %>% 
+  count(exercise) -> exercise_long_alluvial
+
+names(exercise_long_alluvial)<-c("id","year","exercise","count")
+
+exercise_long_alluvial %>% 
+  mutate(exercise=factor(exercise, levels=c("5+ times per week", "2-4 times per week","A few times a month", "Never", ordered=TRUE))) -> exercise_long_alluvial
+
+levels(exercise_long_alluvial$year) <- c("2018", "2019", "2020", "2021", "2022", "2023")
+
+ggplot(exercise_long_alluvial,
+       aes(x = year, stratum = exercise,
+           alluvium = id,
+           y = count, fill = exercise))+
+  geom_flow()+
+  geom_stratum()+
+  theme(b.position = "bottom")+
+  ylab("Count of Older Adults")+
+  xlab("Year")+
+  ggtitle("Exercise Frequency of Older Adults from 2018 to 2023")+
+            scale_fill_brewer("Exercise Frequency",palette="RdYlGn", direction = -1)+
+  theme_minimal()
+
+
+```
+
+This graph allows the reader to see how people moved from year to year between exercise frequencies, while the other only shows the group totals and not how people moved.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
